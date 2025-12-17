@@ -1,0 +1,178 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Banana Ripeness AI Lab & Data Hub</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; text-align: center; padding: 20px; background-color: #fdfae6; color: #333; }
+        #container { max-width: 800px; margin: auto; background: white; padding: 30px; border-radius: 20px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); }
+        #camera-wrapper { position: relative; width: 320px; height: 240px; margin: 20px auto; background: #eee; border-radius: 10px; overflow: hidden; border: 3px solid #f1c40f; display: flex; align-items: center; justify-content: center; }
+        video, canvas { width: 100%; height: 100%; object-fit: cover; }
+        .controls { margin-bottom: 20px; }
+        button { border: none; padding: 12px 24px; font-size: 14px; font-weight: bold; cursor: pointer; border-radius: 8px; margin: 5px; transition: 0.3s; }
+        .btn-main { background-color: #f1c40f; }
+        .btn-save { background-color: #2ecc71; color: white; }
+        .btn-export { background-color: #3498db; color: white; }
+        .btn-reset { background-color: #e74c3c; color: white; }
+        button:hover { opacity: 0.8; transform: translateY(-2px); }
+        .info-box { text-align: left; margin-top: 25px; padding: 20px; border-radius: 10px; background-color: #fff9db; display: none; border-left: 5px solid #f1c40f; }
+        #label-container { font-size: 1.2rem; font-weight: bold; margin: 15px 0; color: #2c3e50; }
+        #lab-notebook { margin-top: 40px; text-align: left; border-top: 3px solid #333; padding-top: 20px; }
+        .log-entry { display: flex; align-items: center; background: #f9f9f9; margin-bottom: 10px; padding: 10px; border-radius: 8px; border: 1px solid #ddd; }
+        .log-entry img { width: 60px; height: 60px; border-radius: 5px; margin-right: 15px; object-fit: cover; }
+    </style>
+</head>
+<body>
+
+<div id="container">
+    <h2>🔬 Banana Ripeness AI Lab</h2>
+    <p>Collect data to analyze the rate of biological ripening.</p>
+    
+    <div class="controls">
+        <button class="btn-main" onclick="setupWebcam()">1. Open Camera</button>
+        <button class="btn-main" onclick="captureAndClassify()">2. Take Photo & Classify</button>
+        <button class="btn-save" id="save-btn" style="display:none;" onclick="saveToNotebook()">3. Save to Notebook</button>
+        <button class="btn-export" id="export-btn" style="display:none;" onclick="exportToCSV()">4. Export CSV</button>
+        <br>
+        <input type="file" id="image-upload" accept="image/*" style="display:none" onchange="handleUpload(event)">
+        <button style="background-color: #ecf0f1;" onclick="document.getElementById('image-upload').click()">Upload File</button>
+        <button class="btn-reset" onclick="resetPage()">Restart</button>
+    </div>
+
+    <div id="camera-wrapper">
+        <video id="webcam-view" autoplay playsinline hidden></video>
+        <canvas id="capture-canvas"></canvas>
+    </div>
+
+    <div id="label-container">Ready to analyze...</div>
+
+    <div id="info-panel" class="info-box">
+        <h3 id="info-title"></h3>
+        <div id="info-content-en"></div>
+        <hr style="margin: 15px 0; border: 0; border-top: 1px solid #ddd;">
+        <div id="info-content-zh"></div>
+    </div>
+
+    <div id="lab-notebook">
+        <h3>📓 Lab Notebook Logs</h3>
+        <div id="log-list"><p style="color: #888;">No data collected.</p></div>
+    </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@latest/dist/tf.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js"></script>
+
+<script type="text/javascript">
+    const URL = "https://teachablemachine.withgoogle.com/models/xv6JOJi-G/";
+    let model, webcamStream, labelContainer;
+    let currentResult = "", currentConfidence = "";
+    let labData = []; // Array to store data for CSV
+
+    async function loadModel() {
+        model = await tmImage.load(URL + "model.json", URL + "metadata.json");
+        labelContainer = document.getElementById("label-container");
+    }
+    loadModel();
+
+    async function setupWebcam() {
+        try {
+            webcamStream = await navigator.mediaDevices.getUserMedia({ video: true });
+            document.getElementById('webcam-view').srcObject = webcamStream;
+            document.getElementById('webcam-view').hidden = false;
+            document.getElementById('capture-canvas').hidden = true;
+        } catch (err) { alert("Camera error."); }
+    }
+
+    async function captureAndClassify() {
+        const video = document.getElementById('webcam-view');
+        const canvas = document.getElementById('capture-canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.width = video.videoWidth || 320;
+        canvas.height = video.videoHeight || 240;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        video.hidden = true; canvas.hidden = false;
+        await predict(canvas);
+        document.getElementById("save-btn").style.display = "inline-block";
+    }
+
+    async function handleUpload(event) {
+        const reader = new FileReader();
+        reader.onload = function() {
+            const img = new Image();
+            img.onload = async function() {
+                const canvas = document.getElementById('capture-canvas');
+                canvas.width = img.width; canvas.height = img.height;
+                canvas.getContext('2d').drawImage(img, 0, 0);
+                document.getElementById('webcam-view').hidden = true;
+                canvas.hidden = false;
+                await predict(canvas);
+                document.getElementById("save-btn").style.display = "inline-block";
+            };
+            img.src = reader.result;
+        }
+        reader.readAsDataURL(event.target.files[0]);
+    }
+
+    async function predict(inputElement) {
+        const prediction = await model.predict(inputElement);
+        let highest = prediction.reduce((prev, current) => (prev.probability > current.probability) ? prev : current);
+        currentResult = highest.className;
+        currentConfidence = (highest.probability * 100).toFixed(1) + "%";
+        labelContainer.innerHTML = `Result: ${currentResult} (${currentConfidence})`;
+        displayDetails(currentResult);
+    }
+
+    function saveToNotebook() {
+        const timestamp = new Date().toLocaleString();
+        const imageData = document.getElementById('capture-canvas').toDataURL("image/png");
+        
+        // Add to internal array for CSV
+        labData.push({ time: timestamp, result: currentResult, confidence: currentConfidence });
+
+        const logList = document.getElementById("log-list");
+        if (logList.querySelector('p')) logList.innerHTML = "";
+        
+        const entry = document.createElement("div");
+        entry.className = "log-entry";
+        entry.innerHTML = `<img src="${imageData}"><div><strong>${currentResult}</strong> (${currentConfidence})<br><small>${timestamp}</small></div>`;
+        logList.prepend(entry);
+        
+        document.getElementById("export-btn").style.display = "inline-block";
+        alert("Saved!");
+    }
+
+    function exportToCSV() {
+        let csvContent = "data:text/csv;charset=utf-8,Timestamp,Ripeness Level,Confidence\n";
+        labData.forEach(row => {
+            csvContent += `${row.time},${row.result},${row.confidence}\n`;
+        });
+        const encodedUri = encodeURI(csvContent);
+        const link = document.createElement("a");
+        link.setAttribute("href", encodedUri);
+        link.setAttribute("download", "banana_lab_data.csv");
+        document.body.appendChild(link);
+        link.click();
+    }
+
+    function displayDetails(className) {
+        const panel = document.getElementById("info-panel");
+        panel.style.display = "block";
+        const data = {
+            unripe: { title: "Unripe / 未成熟", en: "Green skin. High resistant starch.", zh: "綠色表皮。高抗性澱粉。" },
+            ripe: { title: "Ripe / 已成熟", en: "Yellow skin. Starch turned to sugar.", zh: "黃色表皮。澱粉轉化為糖。" },
+            overripe: { title: "Overripe / 過度成熟", en: "Brown spots. Easiest to digest.", zh: "褐色斑點。最易消化。" }
+        };
+        const info = data[className.toLowerCase()] || data['ripe'];
+        document.getElementById("info-title").innerText = info.title;
+        document.getElementById("info-content-en").innerHTML = info.en;
+        document.getElementById("info-content-zh").innerHTML = info.zh;
+    }
+
+    function resetPage() {
+        location.reload(); // Simplest way to clear everything for a new lab session
+    }
+</script>
+
+</body>
+</html>
